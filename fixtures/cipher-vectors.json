@@ -1,0 +1,49 @@
+[
+  {
+    "name": "checkout-payload",
+    "key": "PkW64zMe5NVdrlPVNnjo2Jy9nOb7v1Xg",
+    "iv": "5NVdrlPVNnjo2Jy9",
+    "payload": {
+      "merchantCode": "842217",
+      "amount": "1.500",
+      "currency": "KWD"
+    },
+    "ciphertextHex": "0e7898bd7464d0c402fe8a949d9cbf9b84c9ca6239b5e015bd42c0d4b30b12ee6da24d857cfb1ebd973d9cd504cc1445486a344aafe155b22776cd3215a14bc7"
+  },
+  {
+    "name": "json-escapes",
+    "key": "PkW64zMe5NVdrlPVNnjo2Jy9nOb7v1Xg",
+    "iv": "5NVdrlPVNnjo2Jy9",
+    "payload": {
+      "note": "line\nbreak \"quoted\" back\\slash",
+      "tab": "a\tb"
+    },
+    "ciphertextHex": "410c4114ab66dc17daf533a0f7dd26e8604730bc9796a793cb416713d1afac32b6bcd56b66ce656cb93b7f0f22e2e05890307970d63919e0e688b44a634bdccd"
+  },
+  {
+    "name": "block-boundary",
+    "key": "PkW64zMe5NVdrlPVNnjo2Jy9nOb7v1Xg",
+    "iv": "5NVdrlPVNnjo2Jy9",
+    "payload": {
+      "m": "xxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    "ciphertextHex": "0cd2a8bb4b52e9517df7183b7d66c51b6735d4c399255cadba13fff5320e6252a7face45ca1d457d63bd1e5fb9d471356d351d8ca443eaa8eba5d6e76e72da51"
+  },
+  {
+    "name": "nested-alt-key",
+    "key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "iv": "BBBBBBBBBBBBBBBB",
+    "payload": {
+      "a": {
+        "b": [
+          "1",
+          "2"
+        ]
+      },
+      "n": 7,
+      "flag": true,
+      "none": null
+    },
+    "ciphertextHex": "201761869916136e60ef4b8e1be5269210497624fc5aeb00ead7b4399b4eb97d0cb326c6d9c7e1bd8538d538af3b2549b9c09b03ebe238433fe4bf3b874e3f46"
+  }
+]
