@@ -16,12 +16,14 @@ class Webhooks:
         if isinstance(body, (str, bytes)):
             try:
                 payload = json.loads(body)
-            except ValueError:
+            except (ValueError, RecursionError):
+                # RecursionError: deeply nested brackets in a forged body.
                 raise HesabeSignatureError("Webhook body is not valid JSON") from None
         else:
             payload = body
 
-        if not isinstance(payload, dict) or not payload.get("token"):
+        token = payload.get("token") if isinstance(payload, dict) else None
+        if not isinstance(token, str) or not token:
             raise HesabeSignatureError("Webhook payload has no transaction token")
         return HesabeObject.wrap(payload)
 

@@ -15,10 +15,18 @@
   { "input": "1e3", "expected": "1000.000" },
   { "input": "1.5e-7", "expected": "0.000" },
   { "input": "-0", "expected": "0.000" },
+  { "input": "5.", "expected": "5.000" },
+  { "input": "1e24", "expected": "1000000000000000000000000.000" },
+  { "input": "1e-5000", "expected": "0.000" },
   { "input": "-1", "throws": true },
   { "input": -0.5, "throws": true },
   { "input": "", "throws": true },
   { "input": "abc", "throws": true },
   { "input": "1.2.3", "throws": true },
-  { "input": "1,500", "throws": true }
+  { "input": "1,500", "throws": true },
+  { "input": "1e25", "throws": true },
+  { "input": "1_000", "throws": true },
+  { "input": "٥", "throws": true },
+  { "input": "nan", "throws": true },
+  { "input": "inf", "throws": true }
 ]

@@ -14,9 +14,12 @@ class Resource:
 
     def _with_merchant_code(self, payload: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
         """Every Hesabe payload carries the merchant code; callers never supply it."""
-        merged: Dict[str, Any] = {"merchantCode": self._transport.config.merchant_code}
+        merged: Dict[str, Any] = {}
         if payload:
             merged.update({k: v for k, v in payload.items() if v is not None})
+        # Written last: a stray caller key must not redirect the call to another
+        # merchant's account.
+        merged["merchantCode"] = self._transport.config.merchant_code
         return merged
 
     def _gateway(self, method: str, path: str, **kwargs: Any) -> Any:
@@ -30,17 +33,28 @@ class Resource:
         )
 
     def _merchant(self, method: str, path: str, **kwargs: Any) -> Any:
-        def send() -> Any:
+        def send(bearer: str) -> Any:
             return self._transport.request(
                 method,
                 path,
                 base_url=self._transport.config.merchant_api_url,
-                bearer_token=self._session.token(),
+                bearer_token=bearer,
                 **kwargs,
             )
 
+        idempotent = kwargs.get("idempotent")
+        replayable = idempotent if idempotent is not None else method == "GET"
+
+        # Taken outside the retry so a rejected panel login surfaces as itself
+        # instead of provoking a second login attempt.
+        bearer = self._session.token()
         try:
-            return send()
+            return send(bearer)
         except HesabeAuthenticationError:
+            # A 401 can arrive after Hesabe already processed the call, and there
+            # are no idempotency keys — replaying a refund or an invoice would
+            # move money twice. Only replayable calls get a second attempt.
+            if not replayable:
+                raise
             self._session.invalidate()
-            return send()
+            return send(self._session.token())

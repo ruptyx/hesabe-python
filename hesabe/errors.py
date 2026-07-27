@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, Optional
 
 _DECLINE_PATTERNS = (
@@ -69,13 +70,18 @@ class HesabeSignatureError(HesabeError):
 
 
 def error_from_response(
-    message: str,
+    message: Any,
     *,
     status_code: Optional[int] = None,
     code: Optional[int] = None,
     field_errors: Optional[Dict[str, Any]] = None,
     raw: Any = None,
 ) -> HesabeError:
+    # Hesabe usually sends a string, but a localised {"en": ..., "ar": ...}
+    # object shows up too, and an error path must never crash on one.
+    if not isinstance(message, str):
+        message = json.dumps(message, ensure_ascii=False, default=str)
+
     kwargs = {
         "status_code": status_code,
         "code": code,

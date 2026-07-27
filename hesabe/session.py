@@ -8,6 +8,25 @@ from .errors import HesabeAuthenticationError, HesabeConfigurationError, HesabeE
 from .http import Transport
 
 _REFRESH_MARGIN_SECONDS = 60
+_DEFAULT_EXPIRES_IN_SECONDS = 900
+
+
+def _expires_in_seconds(token: Dict[str, Any]) -> float:
+    """
+    Absent means Hesabe's documented 15 minutes; anything else unusable — zero,
+    negative, or not a number — means treat the token as already expired and
+    fetch another rather than trust one the server may have declared dead.
+    """
+    raw = token.get("expires_in")
+    if raw is None:
+        return _DEFAULT_EXPIRES_IN_SECONDS
+    try:
+        seconds = float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+    if not 0 <= seconds < 1e9:  # NaN, negative, or absurd
+        return 0.0
+    return seconds
 
 
 class _Inflight:
@@ -39,6 +58,7 @@ class MerchantSession:
         self._refresh_token: Optional[str] = None
         self._expires_at = 0.0
         self._inflight: Optional[_Inflight] = None
+        self._generation = 0
 
     def token(self) -> str:
         now = time.time()
@@ -55,6 +75,7 @@ class MerchantSession:
                 # valid, so only the leader waits on the network.
                 return self._access_token
             refresh_token = self._refresh_token
+            generation = self._generation
 
         assert inflight is not None
         if not leader:
@@ -65,32 +86,36 @@ class MerchantSession:
             return inflight.token
 
         try:
-            token = self._acquire(refresh_token)
+            token = self._acquire(refresh_token, generation)
         except BaseException as exc:
+            inflight.error = exc
+            raise
+        else:
+            inflight.token = token
+            return token
+        finally:
+            # Always published, so a waiter can never be left blocked on an
+            # event that nobody sets.
             with self._lock:
                 self._inflight = None
-            inflight.error = exc
             inflight.done.set()
-            raise
-        with self._lock:
-            self._inflight = None
-        inflight.token = token
-        inflight.done.set()
-        return token
 
     def invalidate(self) -> None:
         # An in-flight acquire is left running on purpose: it will publish a
         # fresh token, and the 401-retry path joins it instead of stampeding.
+        # Bumping the generation stops it publishing a token fetched before the
+        # invalidation, which would silently undo this call.
         with self._lock:
             self._access_token = None
             self._refresh_token = None
             self._expires_at = 0.0
+            self._generation += 1
 
-    def _acquire(self, refresh_token: Optional[str]) -> str:
+    def _acquire(self, refresh_token: Optional[str], generation: int) -> str:
         if refresh_token:
             try:
                 return self._exchange(
-                    "api/v1/token-refresh", {"refreshToken": refresh_token}
+                    "api/v1/token-refresh", {"refreshToken": refresh_token}, generation
                 )
             except HesabeError:
                 with self._lock:
@@ -106,10 +131,12 @@ class MerchantSession:
                 "HESABE_MERCHANT_USERNAME and HESABE_MERCHANT_PASSWORD."
             )
         return self._exchange(
-            "api/v1/login", {"username": config.username, "password": config.password}
+            "api/v1/login",
+            {"username": config.username, "password": config.password},
+            generation,
         )
 
-    def _exchange(self, path: str, payload: Dict[str, Any]) -> str:
+    def _exchange(self, path: str, payload: Dict[str, Any], generation: int) -> str:
         result = self._transport.request(
             "POST",
             path,
@@ -124,7 +151,8 @@ class MerchantSession:
             raise HesabeAuthenticationError("Hesabe did not return an access token")
 
         with self._lock:
-            self._access_token = access_token
-            self._refresh_token = token.get("refresh_token")
-            self._expires_at = time.time() + float(token.get("expires_in") or 900)
+            if generation == self._generation:
+                self._access_token = access_token
+                self._refresh_token = token.get("refresh_token")
+                self._expires_at = time.time() + _expires_in_seconds(token)
         return access_token

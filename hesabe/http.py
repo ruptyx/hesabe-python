@@ -3,8 +3,10 @@ from __future__ import annotations
 import email.utils
 import json
 import random
+import re
 import time
 import urllib.parse
+from http import cookiejar
 from typing import Any, Callable, Dict, Mapping, NamedTuple, Optional, Tuple
 
 import requests
@@ -17,7 +19,8 @@ from .types import HesabeObject
 _RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504})
 _RETRY_AFTER_STATUS = frozenset({429, 503})
 _RETRY_AFTER_MAX_SECONDS = 30.0
-_USER_AGENT = "hesabe-python/1.1.0"
+_RETRY_AFTER_SECONDS = re.compile(r"^[0-9]+(?:\.[0-9]+)?\Z")
+_USER_AGENT = "hesabe-python/1.2.0"
 
 # Retained from 1.0, when the HTTP implementation was selected at import time.
 BACKEND = "requests"
@@ -33,7 +36,17 @@ class _HttpResponse(NamedTuple):
 # HTTP status codes; only transport failures (DNS, TLS, timeout) may raise.
 SendFunc = Callable[[str, str, Dict[str, str], Optional[bytes], float], _HttpResponse]
 
+
+class _BlockCookies(cookiejar.DefaultCookiePolicy):
+    """The Session is process-wide; a cookie set on one client must not ride
+    along on another merchant's calls."""
+
+    def set_ok(self, cookie: Any, request: Any) -> bool:
+        return False
+
+
 _session = requests.Session()
+_session.cookies.set_policy(_BlockCookies())
 
 
 def _send_default(
@@ -57,13 +70,16 @@ def _backoff(attempt: int) -> float:
 
 
 def _retry_after_seconds(headers: Mapping[str, str]) -> Optional[float]:
-    value = headers.get("Retry-After")
+    # A custom SendFunc may hand back a plain dict rather than a case-insensitive
+    # mapping, so try both spellings before giving up on the header.
+    value = headers.get("Retry-After") or headers.get("retry-after")
     if not value:
         return None
     value = value.strip()
-    try:
+    if _RETRY_AFTER_SECONDS.match(value):
+        # Deliberately not float(): it also accepts "inf", "nan" and "1_000".
         seconds = float(value)
-    except ValueError:
+    else:
         try:
             when = email.utils.parsedate_to_datetime(value)
         except (TypeError, ValueError):
@@ -150,9 +166,9 @@ class Transport:
                     method, url, headers, data, self.config.timeout
                 )
             except Exception as exc:
-                last_error = HesabeConnectionError(
-                    f"Could not reach Hesabe at {url}: {exc}", raw=exc
-                )
+                # The exception is chained, not stored: a requests failure keeps
+                # the PreparedRequest, whose body holds the panel password.
+                last_error = HesabeConnectionError(f"Could not reach Hesabe at {url}: {exc}")
                 if replayable:
                     continue
                 raise last_error from exc
@@ -172,13 +188,17 @@ class Transport:
                     continue
                 raise
 
+            # Login and refresh run unencrypted, so their bodies hold the bearer
+            # and refresh tokens in clear text. Never attach one to an error.
+            safe_raw = envelope if encrypted else None
+
             if envelope.get("status") is False:
                 error = error_from_response(
                     envelope.get("message") or "Hesabe request failed",
                     status_code=status,
                     code=envelope.get("code"),
                     field_errors=_field_errors(envelope.get("data")),
-                    raw=envelope,
+                    raw=safe_raw,
                 )
                 if can_retry:
                     last_error = error
@@ -188,12 +208,23 @@ class Transport:
 
             if status in _RETRYABLE_STATUS:
                 last_error = HesabeAPIError(
-                    f"Hesabe returned HTTP {status}", status_code=status, raw=raw
+                    f"Hesabe returned HTTP {status}", status_code=status, raw=safe_raw
                 )
                 if can_retry:
                     delay = _retry_delay(status, response_headers, attempt)
                     continue
                 raise last_error
+
+            if status >= 300:
+                # A readable body without status:false is still an error when the
+                # status says so — a proxy 403 or a redirect must not read as
+                # success just because the JSON parsed.
+                raise error_from_response(
+                    envelope.get("message") or f"Hesabe returned HTTP {status}",
+                    status_code=status,
+                    code=envelope.get("code"),
+                    raw=safe_raw,
+                )
 
             return envelope
 
@@ -238,9 +269,7 @@ class Transport:
         if method == "GET" or payload is None:
             return None, headers
 
-        body = (
-            {"data": self.cipher.encrypt(dict(payload))} if encrypted else dict(payload)
-        )
+        body = {"data": self.cipher.encrypt(dict(payload))} if encrypted else dict(payload)
         return json.dumps(body).encode("utf-8"), headers
 
     def _parse(self, raw: str, encrypted: bool, status: int) -> Dict[str, Any]:
@@ -259,7 +288,7 @@ class Transport:
             raise HesabeAPIError(
                 f"Unreadable response from Hesabe (HTTP {status})",
                 status_code=status,
-                raw=trimmed[:500],
+                raw=trimmed[:500] if encrypted else None,
             ) from None
 
         if isinstance(parsed, str) and is_hex(parsed):
@@ -273,7 +302,7 @@ class Transport:
         raise HesabeAPIError(
             f"Unexpected response from Hesabe (HTTP {status})",
             status_code=status,
-            raw=trimmed[:500],
+            raw=trimmed[:500] if encrypted else None,
         )
 
     def _require_dict(self, value: Any, status: int) -> Dict[str, Any]:

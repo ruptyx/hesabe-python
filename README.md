@@ -6,7 +6,7 @@ Also available for Node.js: [hesabe-node](https://github.com/ruptyx/hesabe-node)
 Not on PyPI yet — install straight from GitHub, pinning the release tag:
 
 ```bash
-pip install "git+https://github.com/ruptyx/hesabe-python@v1.1.0"
+pip install "git+https://github.com/ruptyx/hesabe-python@v1.2.0"
 ```
 
 Requires Python 3.9+. Two dependencies, installed automatically:
@@ -27,7 +27,12 @@ HESABE_SECRET_KEY=...               # 32 characters
 HESABE_IV_KEY=...                   # 16 characters
 HESABE_MERCHANT_USERNAME=...        # invoices, refunds, reports, POS only
 HESABE_MERCHANT_PASSWORD=...
+HESABE_TIMEOUT=30                   # optional, SECONDS (the Node SDK uses ms)
+HESABE_MAX_RETRIES=2                # optional
 ```
+
+`load_env_file` exports every key in the file, not just the `HESABE_` ones — load
+only dotenv files you control.
 
 ```python
 from hesabe import Hesabe

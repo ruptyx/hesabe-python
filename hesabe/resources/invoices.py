@@ -26,6 +26,39 @@ def _to_payload(params: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+# Split and installment invoices arrive as dicts rather than keyword arguments,
+# so the snake_case names the rest of the SDK takes have to be translated here
+# too — otherwise they would travel to Hesabe verbatim and be ignored.
+_ITEM_KEYS = {
+    "amount": "amount",
+    "invoice_type": "invoiceType",
+    "customer_name": "customerName",
+    "customer_email": "customerEmail",
+    "mobile_number": "mobileNumber",
+    "country_code": "countryCode",
+    "reference_number": "referenceNumber",
+    "description": "description",
+    "expires_at": "expiresAt",
+    "language": "language",
+    "webhook": "webhook",
+    "allocate_pay_type": "allocatePayType",
+    "items_list": "itemsList",
+}
+_WIRE_KEYS = set(_ITEM_KEYS.values())
+
+
+def _split_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    translated: Dict[str, Any] = {}
+    for key, value in item.items():
+        wire = _ITEM_KEYS.get(key, key)
+        if wire not in _WIRE_KEYS:
+            raise ValueError(
+                f"Unknown invoice field {key!r}. Expected one of: {', '.join(sorted(_ITEM_KEYS))}"
+            )
+        translated[wire] = value
+    return _to_payload(translated)
+
+
 def _invoice_fields(
     amount: Money,
     invoice_type: str,
@@ -87,9 +120,19 @@ class Invoices(Resource):
             "api/v1/invoice",
             payload=self._with_merchant_code(
                 _invoice_fields(
-                    amount, invoice_type, customer_name, customer_email, mobile_number,
-                    country_code, reference_number, description, expires_at, language,
-                    webhook, allocate_pay_type, items_list,
+                    amount,
+                    invoice_type,
+                    customer_name,
+                    customer_email,
+                    mobile_number,
+                    country_code,
+                    reference_number,
+                    description,
+                    expires_at,
+                    language,
+                    webhook,
+                    allocate_pay_type,
+                    items_list,
                 )
             ),
             idempotent=False,
@@ -104,7 +147,17 @@ class Invoices(Resource):
         subscription_type: str,
         start_date: str,
         invoice_type: str = "0",
-        **kwargs: Any,
+        customer_name: Optional[str] = None,
+        customer_email: Optional[str] = None,
+        mobile_number: Optional[str] = None,
+        country_code: Optional[str] = None,
+        reference_number: Optional[str] = None,
+        description: Optional[str] = None,
+        expires_at: Optional[str] = None,
+        language: Optional[str] = None,
+        webhook: Optional[str] = None,
+        allocate_pay_type: Optional[Sequence[int]] = None,
+        items_list: Optional[List[Dict[str, Any]]] = None,
     ) -> HesabeObject:
         """
         Creates a recurring invoice. ``subscription_type="0"`` lets Hesabe
@@ -112,13 +165,19 @@ class Invoices(Resource):
         """
         payload = self._with_merchant_code(
             _invoice_fields(
-                amount, invoice_type,
-                kwargs.get("customer_name"), kwargs.get("customer_email"),
-                kwargs.get("mobile_number"), kwargs.get("country_code"),
-                kwargs.get("reference_number"), kwargs.get("description"),
-                kwargs.get("expires_at"), kwargs.get("language"),
-                kwargs.get("webhook"), kwargs.get("allocate_pay_type"),
-                kwargs.get("items_list"),
+                amount,
+                invoice_type,
+                customer_name,
+                customer_email,
+                mobile_number,
+                country_code,
+                reference_number,
+                description,
+                expires_at,
+                language,
+                webhook,
+                allocate_pay_type,
+                items_list,
             )
         )
         payload.update(
@@ -216,4 +275,4 @@ class Invoices(Resource):
 
     def _prepare(self, invoices: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
         merchant_code = self._transport.config.merchant_code
-        return [{**_to_payload(dict(item)), "merchantCode": merchant_code} for item in invoices]
+        return [{**_split_item(dict(item)), "merchantCode": merchant_code} for item in invoices]

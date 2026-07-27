@@ -20,11 +20,12 @@ from .types import (
     InvoiceType,
     PaymentStatus,
     PaymentType,
+    RefundMethod,
     ServiceType,
     format_amount,
 )
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 __all__ = [
     "BACKEND",
@@ -45,6 +46,7 @@ __all__ = [
     "InvoiceType",
     "PaymentStatus",
     "PaymentType",
+    "RefundMethod",
     "ServiceType",
     "__version__",
     "format_amount",

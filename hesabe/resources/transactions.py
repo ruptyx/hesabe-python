@@ -2,21 +2,34 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
-from ..errors import HesabeSignatureError
+from ..errors import HesabeInvalidRequestError, HesabeSignatureError
 from ..resource import Resource
 from ..types import HesabeObject, _normalize_amount
+
+
+def _path_segment(value: str, name: str) -> str:
+    """
+    Dots are left alone by quote(), and the TypeScript twin's URL builder
+    collapses them, so a lookup key of ".." would address a different endpoint
+    in one SDK and not the other. Neither is a real key; reject both.
+    """
+    if not isinstance(value, str) or not value or set(value) <= {"."}:
+        raise HesabeInvalidRequestError(f"{name} must be a non-empty identifier")
+    return quote(value, safe="")
 
 
 class Transactions(Resource):
     def retrieve(self, payment_token: str) -> HesabeObject:
         """Looks a transaction up by the payment token Hesabe issued."""
-        return self._gateway("GET", f"api/transaction/{quote(payment_token, safe='')}")
+        return self._gateway(
+            "GET", f"api/transaction/{_path_segment(payment_token, 'payment_token')}"
+        )
 
     def retrieve_by_order_reference(self, order_reference_number: str) -> HesabeObject:
         """Looks a transaction up by the reference you supplied at checkout."""
         return self._gateway(
             "GET",
-            f"api/transaction/{quote(order_reference_number, safe='')}",
+            f"api/transaction/{_path_segment(order_reference_number, 'order_reference_number')}",
             query={"isOrderReference": 1},
         )
 
@@ -47,9 +60,7 @@ class Transactions(Resource):
             raise HesabeSignatureError("Redirect payload has no payment token")
 
         confirmed = self.retrieve(str(token))
-        if _normalize_amount(confirmed.get("amount")) != _normalize_amount(
-            claimed.get("amount")
-        ):
+        if _normalize_amount(confirmed.get("amount")) != _normalize_amount(claimed.get("amount")):
             raise HesabeSignatureError(
                 f"Redirect does not match transaction {token}: claimed "
                 f"{claimed.get('amount')}, Hesabe reports {confirmed.get('amount')}"

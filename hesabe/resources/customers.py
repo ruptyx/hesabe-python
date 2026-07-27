@@ -21,5 +21,10 @@ class Customers(Resource):
         )
         if not isinstance(customer, dict) or customer.get("customer_id") is None:
             raise HesabeAPIError("Hesabe did not return a customer", raw=customer)
-        customer["customer_id"] = int(customer["customer_id"])
+        try:
+            customer["customer_id"] = int(customer["customer_id"])
+        except (TypeError, ValueError):
+            raise HesabeAPIError(
+                "Hesabe returned a non-numeric customer_id", raw=customer
+            ) from None
         return customer

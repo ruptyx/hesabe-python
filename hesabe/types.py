@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Union
 
@@ -56,6 +57,11 @@ class InvoiceType:
     INSTALLMENT = "7"
 
 
+class RefundMethod:
+    FULL = "1"
+    PARTIAL = "2"
+
+
 class HesabeObject(dict):
     """A dict that also allows attribute access, so responses read naturally."""
 
@@ -66,7 +72,12 @@ class HesabeObject(dict):
             raise AttributeError(name) from None
 
     def __setattr__(self, name: str, value: Any) -> None:
-        self[name] = value
+        # Private names stay instance attributes; everything else is response
+        # data, which must not pick up bookkeeping fields when it is re-sent.
+        if name.startswith("_"):
+            object.__setattr__(self, name, value)
+        else:
+            self[name] = value
 
     def __dir__(self):
         return list(super().__dir__()) + [key for key in self if isinstance(key, str)]
@@ -80,19 +91,35 @@ class HesabeObject(dict):
         return value
 
 
+# The grammar the TypeScript twin accepts, so the two SDKs agree on exactly
+# which strings are amounts. Decimal on its own is more permissive: it takes
+# Arabic-Indic digits, PEP 515 underscores, "nan" and "inf".
+_DECIMAL = re.compile(r"^[+-]?(?=[0-9]|\.[0-9])[0-9]*(?:\.[0-9]*)?(?:[eE][+-]?[0-9]+)?\Z")
+
+# JavaScript's trim() strips the byte-order mark; Python's strip() does not.
+_TRIM = re.compile("^[\\s\ufeff]+|[\\s\ufeff]+\\Z")
+
+# Decimal's default 28-digit context cannot quantize beyond this, and the
+# TypeScript twin would allocate an unbounded BigInt. No KWD amount comes close.
+_MAX_ADJUSTED_EXPONENT = 24
+
+
 def format_amount(amount: Money) -> str:
     """
     Hesabe rejects amounts that are not fixed to three decimal places, and
     floating point arithmetic upstream is the usual cause of a 506 rejection.
     """
-    try:
-        value = Decimal(str(amount).strip())
-    except (InvalidOperation, ValueError):
-        raise ValueError(f"Invalid amount: {amount!r}") from None
-    if not value.is_finite():
+    text = _TRIM.sub("", str(amount))
+    if not _DECIMAL.match(text):
         raise ValueError(f"Invalid amount: {amount!r}")
+    try:
+        value = Decimal(text)
+    except InvalidOperation:
+        raise ValueError(f"Invalid amount: {amount!r}") from None
     if value < 0:
         raise ValueError(f"Amounts must not be negative: {amount!r}")
+    if value.adjusted() > _MAX_ADJUSTED_EXPONENT:
+        raise ValueError(f"Invalid amount: {amount!r}")
     quantized = value.quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
     return str(abs(quantized))  # abs() folds "-0" into "0.000"
 

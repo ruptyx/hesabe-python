@@ -43,6 +43,20 @@ class DecryptRejectionTest(unittest.TestCase):
         with self.assertRaises(HesabeSignatureError):
             CIPHER.decrypt(self._raw(b"\xff" * 31 + b"\x01"))
 
+    def test_rejects_hex_that_is_not_a_whole_number_of_blocks(self):
+        """Reachable from a redirect URL: ?data=abcd must not raise OpenSSL's own
+        ValueError past the typed hierarchy."""
+        for bad in ("abcd", "00", "deadbeef"):
+            with self.subTest(bad):
+                with self.assertRaises(HesabeSignatureError):
+                    CIPHER.decrypt(bad)
+
+    def test_rejects_padding_bytes_that_disagree(self):
+        """Only the final byte carries the length; the rest must match it."""
+        block = b'{"a":1}' + bytes([0x09]) * 8 + b"\xaa" * 16 + bytes([0x09])
+        with self.assertRaises(HesabeSignatureError):
+            CIPHER.decrypt(self._raw(block[:32]))
+
     def test_rejects_non_hex_input(self):
         for bad in ("", "zz", "abc"):  # empty, non-hex, odd length
             with self.subTest(bad):

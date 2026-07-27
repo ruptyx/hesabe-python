@@ -13,7 +13,7 @@ from .errors import HesabeConfigurationError, HesabeSignatureError
 # Retained from 1.0, when the AES implementation was selected at import time.
 BACKEND = "cryptography"
 
-_HEX = re.compile(r"^[0-9a-fA-F]+$")
+_HEX = re.compile(r"^[0-9a-fA-F]+\Z")
 
 # Hesabe pads to a 32-byte block, not AES's 16, and disables cipher-level
 # padding. Both operations work on bytes; padding by character count corrupts
@@ -31,10 +31,15 @@ def _pad(plaintext: bytes) -> bytes:
 
 
 def _unpad(padded: bytes) -> bytes:
-    if not padded:
-        raise HesabeSignatureError("Decrypted payload is empty")
-    length = padded[-1]
-    if length == 0 or length > _BLOCK or length > len(padded):
+    length = padded[-1] if padded else 0
+    # Every pad byte carries the pad length, so checking all of them rejects
+    # more tampering than trusting the last byte alone, at no cost.
+    if (
+        length == 0
+        or length > _BLOCK
+        or length > len(padded)
+        or padded[-length:] != bytes([length]) * length
+    ):
         raise HesabeSignatureError("Decrypted payload has invalid padding")
     return padded[:-length]
 
@@ -57,7 +62,10 @@ class HesabeCipher:
         return Cipher(algorithms.AES(self._key), modes.CBC(self._iv))
 
     def encrypt(self, payload: Any) -> str:
-        plaintext = _pad(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+        # allow_nan=False: NaN and Infinity are not JSON, and Hesabe rejects the
+        # literals Python would otherwise emit.
+        body = json.dumps(payload, separators=(",", ":"), allow_nan=False)
+        plaintext = _pad(body.encode("utf-8"))
         encryptor = self._cipher().encryptor()
         return (encryptor.update(plaintext) + encryptor.finalize()).hex()
 
@@ -66,7 +74,10 @@ class HesabeCipher:
         if not is_hex(normalized):
             raise HesabeSignatureError("Expected a hex-encoded payload")
         decryptor = self._cipher().decryptor()
-        decrypted = decryptor.update(bytes.fromhex(normalized)) + decryptor.finalize()
+        try:
+            decrypted = decryptor.update(bytes.fromhex(normalized)) + decryptor.finalize()
+        except ValueError:
+            raise HesabeSignatureError("Ciphertext is not a whole number of blocks") from None
         unpadded = _unpad(decrypted)
         try:
             return json.loads(unpadded.decode("utf-8"))

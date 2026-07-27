@@ -7,7 +7,8 @@ Sibling SDK: [hesabe-node](https://github.com/ruptyx/hesabe-node).
 ## Testing
 
 - Unit suite: `python -m unittest discover -s tests`
-- Single file: `python -m unittest tests.test_http`
+- Single file: `python -m unittest discover -s tests -p "test_http.py"` (the plain
+  `python -m unittest tests.test_http` form cannot import `tests/_support.py`)
 - Live sandbox: `python tests/smoke.py`
 
 The unit suite is hermetic (scripted `SendFunc`; no network). The smoke suite hits the
@@ -56,8 +57,13 @@ documentation, safe to keep in the repo.
    transaction from the API. Keep that framing in any new docs or examples.
 6. **Retry semantics are deliberate.** GETs are replayable; 429s are always replayable
    (rejected before processing); other non-idempotent calls fail fast — Hesabe has no
-   idempotency keys, so retrying an ambiguous POST risks double-charging. Redirects
-   are refused (`allow_redirects=False`) — `accessCode` must never follow one.
+   idempotency keys, so retrying an ambiguous POST risks double-charging. This applies
+   to the 401 re-auth in `Resource._merchant` too: it replays only replayable calls,
+   because a 401 can arrive *after* Hesabe processed a refund. Redirects are refused
+   (`allow_redirects=False`) and any status ≥ 300 raises — `accessCode` must never
+   follow one, and a readable body at an error status is still an error.
+   `Retry-After` accepts plain seconds or an HTTP-date and nothing else (bare
+   `float()` would take `"inf"`, `"nan"` and PEP 515 underscores).
 7. **The crypto is HesabeCrypt-compatible, not textbook.** AES-256-CBC with manual
    padding to 32-byte blocks (pad byte = pad length), cipher-level padding disabled,
    lowercase hex. Do not "correct" it to PKCS7/16 — it matches Hesabe's reference kit.
@@ -69,9 +75,17 @@ documentation, safe to keep in the repo.
 
 - Python 3.9+, `py.typed` shipped.
 - Errors: raise the typed `Hesabe*Error` hierarchy; every error carries
-  `message`, `code`, `status_code`, `raw`.
+  `message`, `code`, `status_code`, `raw`. **Nothing may escape untyped** —
+  attacker-reachable paths (redirect data, webhook bodies, gateway responses)
+  have repeatedly leaked bare `ValueError`/`TypeError`/`RecursionError`.
+- Secrets never enter a repr, a log line, or an error. `HesabeConfig` marks the
+  four secret fields `repr=False`, unencrypted (merchant-auth) response bodies
+  are never attached as `raw`, and connection errors are chained rather than
+  stored — a `requests` exception carries the login body.
 - Dotenv is opt-in (`env_path=`); constructing a client must never mutate
-  `os.environ` on its own.
+  `os.environ` on its own. It exports *every* key in the file, including
+  `HTTPS_PROXY` and `REQUESTS_CA_BUNDLE`, which `requests` honours per call —
+  only load dotenv files you control.
 - Comments explain WHY or document a function — never what the code obviously does,
   never what used to be there.
 - Work is not complete until the unit suite passes and — for transport/crypto/session
@@ -82,5 +96,15 @@ documentation, safe to keep in the repo.
 - The production merchant-API base URL (`merchantapi.hesabe.com`) is absent from the
   current docs; confirm with Hesabe support (support@hesabe.com) before the first
   production use of the merchant namespace (invoices/refunds/reports/POS).
+- `config.timeout` is a `requests` timeout, which bounds each socket read rather than
+  the whole call, so a server dripping bytes slower than the timeout is unbounded.
+  A real deadline needs a streamed body with an elapsed-time check on every chunk —
+  more machinery than the risk warrants against a real gateway.
+- `HesabeObject` resolves attributes through `__getattr__`, so a response field named
+  after a dict method (`items`, `keys`, `get`) reads as the method. Fixing it would
+  mean overriding `__getattribute__`, which breaks the internal `confirmed.get(...)`
+  calls; use subscript access for those fields.
+- `MerchantSession` waiters re-raise the leader's exception object, so its traceback
+  is shared across threads. `concurrent.futures` behaves the same way; a test pins it.
 - Hesabe documents no failure `resultCode` values and no webhook signature; if either
   ever appears in the docs, revisit `hesabe/webhooks.py`.

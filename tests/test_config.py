@@ -99,6 +99,32 @@ class ResolutionTest(unittest.TestCase):
         self.assertEqual(config.timeout, 30.0)
         self.assertEqual(config.max_retries, 2)
 
+    def test_hostile_numeric_env_values_never_escape_as_untyped_errors(self):
+        """int(float("inf")) raises OverflowError, which is not a HesabeError."""
+        for value in ("inf", "nan", "1e400", "-3", "2.9"):
+            with self.subTest(value):
+                with mock.patch.dict(
+                    os.environ,
+                    {"HESABE_TIMEOUT": value, "HESABE_MAX_RETRIES": value},
+                    clear=True,
+                ):
+                    config = resolve_config(**CREDENTIALS)
+                self.assertGreaterEqual(config.max_retries, 0)
+                self.assertGreater(config.timeout, 0)
+
+    def test_negative_max_retries_would_skip_the_request_loop_entirely(self):
+        self.assertEqual(resolve_config(**CREDENTIALS, max_retries=-1).max_retries, 2)
+
+
+class SecretExposureTest(unittest.TestCase):
+    def test_repr_hides_every_secret(self):
+        """Transport.config hangs off every resource, so its repr reaches logs."""
+        config = resolve_config(**CREDENTIALS, username="u", password="hunter2")
+        text = repr(config)
+        for secret in (config.access_code, config.secret_key, config.iv_key, "hunter2"):
+            self.assertNotIn(secret, text)
+        self.assertIn(config.merchant_code, text)
+
 
 if __name__ == "__main__":
     unittest.main()

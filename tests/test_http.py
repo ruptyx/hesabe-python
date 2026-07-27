@@ -14,10 +14,11 @@ from hesabe.errors import (
     HesabeAuthenticationError,
     HesabeCardError,
     HesabeConnectionError,
+    HesabeError,
     HesabeInvalidRequestError,
     HesabeRateLimitError,
 )
-from hesabe.http import _HttpResponse
+from hesabe.http import _HttpResponse, _retry_after_seconds
 
 HTML = "<html><body>502 Bad Gateway</body></html>"
 
@@ -172,6 +173,68 @@ class RequestBuildingTest(unittest.TestCase):
         transport2, send2 = make_transport(ok_envelope({}))
         gateway_get(transport2, payload={"x": 1})
         self.assertEqual(send2.calls[0]["headers"]["accessCode"], "ACCESS-CODE")
+
+
+class ErrorStatusTest(unittest.TestCase):
+    def test_readable_body_at_an_error_status_is_not_success(self):
+        """A proxy's 403 parses cleanly; returning it would read as success and
+        hand the caller None."""
+        transport, _ = make_transport(json_response(403, {"message": "forbidden"}))
+        with self.assertRaises(HesabeAuthenticationError):
+            gateway_get(transport)
+
+    def test_redirect_is_refused_rather_than_returned(self):
+        transport, send = make_transport(json_response(301, {"url": "https://elsewhere.test"}))
+        with self.assertRaises(HesabeError):
+            gateway_get(transport)
+        self.assertEqual(len(send.calls), 1)
+
+    def test_non_string_message_does_not_crash_the_error_path(self):
+        """Localised {"en": ..., "ar": ...} messages appear in the wild."""
+        body = CIPHER.encrypt({"status": False, "message": {"en": "Declined"}, "code": 506})
+        transport, _ = make_transport(_HttpResponse(400, body, {}))
+        with self.assertRaises(HesabeError) as caught:
+            gateway_get(transport)
+        self.assertIn("Declined", caught.exception.message)
+
+
+class SecretExposureTest(unittest.TestCase):
+    def test_connection_errors_do_not_carry_the_request(self):
+        """requests' exceptions keep the PreparedRequest, whose body is the
+        panel login."""
+        transport, _ = make_transport(OSError("connection reset"))
+        with self.assertRaises(HesabeConnectionError) as caught:
+            transport.request(
+                "POST", "api/v1/login", base_url="https://api.test",
+                payload={"password": "hunter2"}, encrypted=False, idempotent=False,
+            )
+        self.assertIsNone(caught.exception.raw)
+
+    def test_unencrypted_error_bodies_are_not_attached(self):
+        """Login runs in clear text, so its body holds the bearer token."""
+        body = {"status": False, "message": "nope", "token": {"access_token": "AT"}}
+        transport, _ = make_transport(json_response(401, body))
+        with self.assertRaises(HesabeAuthenticationError) as caught:
+            transport.request(
+                "POST", "api/v1/login", base_url="https://api.test",
+                payload={"username": "u"}, encrypted=False, idempotent=False,
+            )
+        self.assertIsNone(caught.exception.raw)
+
+
+class RetryAfterGrammarTest(unittest.TestCase):
+    def test_only_plain_seconds_and_http_dates_are_honoured(self):
+        # float() would take "inf" (a 30s sleep), "nan" (an instant hot retry)
+        # and PEP 515 underscores; the TypeScript twin takes none of them.
+        for header in ("inf", "nan", "1_000", "0x10", "", " ", "-3", "abc"):
+            with self.subTest(header):
+                self.assertIsNone(_retry_after_seconds({"Retry-After": header}))
+        self.assertEqual(_retry_after_seconds({"Retry-After": "5"}), 5.0)
+        self.assertEqual(_retry_after_seconds({"Retry-After": "0"}), 0.0)
+        self.assertEqual(_retry_after_seconds({"Retry-After": "900"}), 30.0)
+
+    def test_header_lookup_is_case_insensitive_for_custom_senders(self):
+        self.assertEqual(_retry_after_seconds({"retry-after": "7"}), 7.0)
 
 
 if __name__ == "__main__":
