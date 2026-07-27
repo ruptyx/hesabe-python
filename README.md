@@ -3,12 +3,14 @@
 Hesabe Payment Gateway SDK for Python.
 Also available for Node.js: [hesabe-node](https://github.com/ruptyx/hesabe-node).
 
+Not on PyPI yet — install straight from GitHub, pinning the release tag:
+
 ```bash
-pip install hesabe
+pip install "git+https://github.com/ruptyx/hesabe-python@v1.1.0"
 ```
 
-Requires Python 3.9+. Two dependencies: [`cryptography`](https://cryptography.io)
-for AES (constant-time, OpenSSL-backed) and
+Requires Python 3.9+. Two dependencies, installed automatically:
+[`cryptography`](https://cryptography.io) for AES (constant-time, OpenSSL-backed) and
 [`requests`](https://requests.readthedocs.io) for HTTP (connections are pooled and
 reused across calls).
 
