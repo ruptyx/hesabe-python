@@ -4,10 +4,10 @@ import email.utils
 import json
 import random
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from typing import Any, Callable, Dict, Mapping, NamedTuple, Optional, Tuple
+
+import requests
 
 from .config import HesabeConfig
 from .crypto import HesabeCipher, is_hex
@@ -17,7 +17,10 @@ from .types import HesabeObject
 _RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504})
 _RETRY_AFTER_STATUS = frozenset({429, 503})
 _RETRY_AFTER_MAX_SECONDS = 30.0
-_USER_AGENT = "hesabe-python/1.0.0"
+_USER_AGENT = "hesabe-python/1.1.0"
+
+# Retained from 1.0, when the HTTP implementation was selected at import time.
+BACKEND = "requests"
 
 
 class _HttpResponse(NamedTuple):
@@ -26,81 +29,27 @@ class _HttpResponse(NamedTuple):
     headers: Mapping[str, str]
 
 
-# method, url, headers, body, timeout -> response. Backends never raise on HTTP
-# status codes; only transport failures (DNS, TLS, timeout) may raise.
+# method, url, headers, body, timeout -> response. The sender never raises on
+# HTTP status codes; only transport failures (DNS, TLS, timeout) may raise.
 SendFunc = Callable[[str, str, Dict[str, str], Optional[bytes], float], _HttpResponse]
 
+_session = requests.Session()
 
-def _load_http_backend() -> Tuple[SendFunc, str]:
-    """Prefers a pooled HTTP client if one is installed, else stdlib urllib.
 
-    Redirects are disabled in every backend: Hesabe never redirects API calls,
-    and following one would re-send the accessCode header to wherever it points.
+def _send_default(
+    method: str, url: str, headers: Dict[str, str], body: Optional[bytes], timeout: float
+) -> _HttpResponse:
+    """Sends over a shared pooled Session so TLS connections are reused.
+
+    Redirects are refused: Hesabe never redirects API calls, and following one
+    would re-send the accessCode header to wherever it points.
     """
-    try:
-        import httpx
-
-        client = httpx.Client(follow_redirects=False)
-
-        def send_httpx(
-            method: str, url: str, headers: Dict[str, str], body: Optional[bytes], timeout: float
-        ) -> _HttpResponse:
-            response = client.request(
-                method, url, headers=headers, content=body, timeout=timeout
-            )
-            return _HttpResponse(response.status_code, response.text, response.headers)
-
-        return send_httpx, "httpx"
-    except ImportError:
-        pass
-
-    try:
-        import urllib3
-
-        pool = urllib3.PoolManager()
-
-        def send_urllib3(
-            method: str, url: str, headers: Dict[str, str], body: Optional[bytes], timeout: float
-        ) -> _HttpResponse:
-            response = pool.request(
-                method,
-                url,
-                headers=headers,
-                body=body,
-                redirect=False,
-                retries=False,
-                timeout=urllib3.Timeout(total=timeout),
-            )
-            return _HttpResponse(
-                response.status, response.data.decode("utf-8", "replace"), response.headers
-            )
-
-        return send_urllib3, "urllib3"
-    except ImportError:
-        pass
-
-    class _NoRedirect(urllib.request.HTTPRedirectHandler):
-        def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
-            return None
-
-    opener = urllib.request.build_opener(_NoRedirect())
-
-    def send_urllib(
-        method: str, url: str, headers: Dict[str, str], body: Optional[bytes], timeout: float
-    ) -> _HttpResponse:
-        request = urllib.request.Request(url, data=body, headers=dict(headers), method=method)
-        try:
-            with opener.open(request, timeout=timeout) as response:
-                return _HttpResponse(
-                    response.status, response.read().decode("utf-8", "replace"), response.headers
-                )
-        except urllib.error.HTTPError as exc:
-            return _HttpResponse(exc.code, exc.read().decode("utf-8", "replace"), exc.headers)
-
-    return send_urllib, "urllib"
-
-
-_send_default, BACKEND = _load_http_backend()
+    response = _session.request(
+        method, url, headers=headers, data=body, timeout=timeout, allow_redirects=False
+    )
+    return _HttpResponse(
+        response.status_code, response.content.decode("utf-8", "replace"), response.headers
+    )
 
 
 def _backoff(attempt: int) -> float:

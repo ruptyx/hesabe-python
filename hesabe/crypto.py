@@ -1,11 +1,17 @@
+"""AES-256-CBC with Hesabe's 32-byte block padding, backed by `cryptography`."""
+
 from __future__ import annotations
 
 import json
 import re
-import warnings
-from typing import Any, Callable, Tuple
+from typing import Any
+
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from .errors import HesabeConfigurationError, HesabeSignatureError
+
+# Retained from 1.0, when the AES implementation was selected at import time.
+BACKEND = "cryptography"
 
 _HEX = re.compile(r"^[0-9a-fA-F]+$")
 
@@ -13,52 +19,6 @@ _HEX = re.compile(r"^[0-9a-fA-F]+$")
 # padding. Both operations work on bytes; padding by character count corrupts
 # any non-ASCII payload.
 _BLOCK = 32
-
-CbcFunc = Callable[[bytes, bytes, bytes], bytes]
-
-
-def _load_backend() -> Tuple[CbcFunc, CbcFunc, str]:
-    """Prefers an audited AES if one is installed, else the bundled fallback."""
-    try:
-        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-
-        def encrypt(key: bytes, iv: bytes, data: bytes) -> bytes:
-            encryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
-            return encryptor.update(data) + encryptor.finalize()
-
-        def decrypt(key: bytes, iv: bytes, data: bytes) -> bytes:
-            decryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
-            return decryptor.update(data) + decryptor.finalize()
-
-        return encrypt, decrypt, "cryptography"
-    except ImportError:
-        pass
-
-    try:
-        from Crypto.Cipher import AES
-
-        def encrypt(key: bytes, iv: bytes, data: bytes) -> bytes:
-            return AES.new(key, AES.MODE_CBC, iv).encrypt(data)
-
-        def decrypt(key: bytes, iv: bytes, data: bytes) -> bytes:
-            return AES.new(key, AES.MODE_CBC, iv).decrypt(data)
-
-        return encrypt, decrypt, "pycryptodome"
-    except ImportError:
-        pass
-
-    from ._aes import decrypt_cbc, encrypt_cbc
-
-    warnings.warn(
-        "hesabe is using its bundled pure-Python AES, which is not "
-        "constant-time and is far slower than a native backend. Install one "
-        "with `pip install cryptography`.",
-        UserWarning,
-    )
-    return encrypt_cbc, decrypt_cbc, "builtin"
-
-
-_encrypt_cbc, _decrypt_cbc, BACKEND = _load_backend()
 
 
 def is_hex(value: str) -> bool:
@@ -93,15 +53,20 @@ class HesabeCipher:
         self._key = _key_bytes(secret_key, 32, "secret_key")
         self._iv = _key_bytes(iv_key, 16, "iv_key")
 
+    def _cipher(self) -> Cipher:
+        return Cipher(algorithms.AES(self._key), modes.CBC(self._iv))
+
     def encrypt(self, payload: Any) -> str:
-        plaintext = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        return _encrypt_cbc(self._key, self._iv, _pad(plaintext)).hex()
+        plaintext = _pad(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+        encryptor = self._cipher().encryptor()
+        return (encryptor.update(plaintext) + encryptor.finalize()).hex()
 
     def decrypt(self, ciphertext: str) -> Any:
         normalized = ciphertext.strip()
         if not is_hex(normalized):
             raise HesabeSignatureError("Expected a hex-encoded payload")
-        decrypted = _decrypt_cbc(self._key, self._iv, bytes.fromhex(normalized))
+        decryptor = self._cipher().decryptor()
+        decrypted = decryptor.update(bytes.fromhex(normalized)) + decryptor.finalize()
         unpadded = _unpad(decrypted)
         try:
             return json.loads(unpadded.decode("utf-8"))

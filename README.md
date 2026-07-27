@@ -1,22 +1,16 @@
 # hesabe
 
-Hesabe Payment Gateway SDK for Python. No required dependencies.
+Hesabe Payment Gateway SDK for Python.
 Also available for Node.js: [hesabe-node](https://github.com/ruptyx/hesabe-node).
 
 ```bash
 pip install hesabe
 ```
 
-Requires Python 3.9+. Uses only the standard library. If `cryptography` or `pycryptodome`
-is installed it is used for AES automatically; otherwise a bundled implementation
-(NIST-vector tested) is used with a `UserWarning`, since it is not constant-time.
-Likewise, if `httpx` or `urllib3` is installed, HTTP connections are pooled and
-reused; otherwise each request opens a new connection via `urllib`.
-
-```python
->>> import hesabe; hesabe.BACKEND, hesabe.HTTP_BACKEND
-('cryptography', 'httpx')
-```
+Requires Python 3.9+. Two dependencies: [`cryptography`](https://cryptography.io)
+for AES (constant-time, OpenSSL-backed) and
+[`requests`](https://requests.readthedocs.io) for HTTP (connections are pooled and
+reused across calls).
 
 ## Setup
 

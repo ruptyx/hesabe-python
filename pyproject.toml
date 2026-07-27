@@ -4,12 +4,15 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hesabe"
-version = "1.0.0"
+version = "1.1.0"
 description = "Hesabe Payment Gateway SDK for Python"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.9"
-dependencies = []
+dependencies = [
+  "cryptography>=42",
+  "requests>=2.31",
+]
 authors = [{ name = "Saad Almajdi" }]
 keywords = ["hesabe", "payment", "gateway", "knet", "kuwait", "mpgs", "apple-pay"]
 classifiers = [

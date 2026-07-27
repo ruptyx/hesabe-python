@@ -20,8 +20,8 @@ documentation, safe to keep in the repo.
 
 ## Key Locations
 
-- Transport (retries, Retry-After, envelope sniffing, HTTP backend selection): `hesabe/http.py`
-- Crypto (AES-256-CBC, 32-byte padding, hex): `hesabe/crypto.py`, pure-Python fallback in `hesabe/_aes.py`
+- Transport (retries, Retry-After, envelope sniffing, pooled requests Session): `hesabe/http.py`
+- Crypto (AES-256-CBC, 32-byte padding, hex, via `cryptography`): `hesabe/crypto.py`
 - Bearer-token session (leader/waiter, stale-while-refresh): `hesabe/session.py`
 - Config resolution (env vars, opt-in dotenv, environment guard): `hesabe/config.py`
 - Amount formatting and shared types: `hesabe/types.py`
@@ -42,9 +42,11 @@ documentation, safe to keep in the repo.
    with string-typed decimals (the only regime where `json.dumps` and `JSON.stringify`
    produce identical bytes). This repo owns the generator; sync the JSON to hesabe-node
    after regenerating.
-3. **Zero required dependencies.** The stdlib baseline must always work. Optional
-   accelerators are detected at import (`cryptography`/`pycryptodome` for AES,
-   `httpx`/`urllib3` for pooled HTTP) — never promote one to a hard dependency.
+3. **Exactly two required dependencies.** `cryptography` for AES (v1.1 deliberately
+   deleted the 1.0 pure-Python fallback — never hand-roll or vendor crypto) and
+   `requests` for HTTP over a shared pooled Session. Do not add a third; do not
+   reintroduce fallbacks. `hesabe.BACKEND` / `hesabe.HTTP_BACKEND` are retained as
+   constants for 1.0 compatibility.
 4. **All money goes through `format_amount`.** Three decimals, half-up, exact Decimal
    arithmetic. Never do float math on amounts; never bypass the formatter when building
    payloads. KWD is a 3-decimal currency — this is load-bearing.
@@ -55,7 +57,7 @@ documentation, safe to keep in the repo.
 6. **Retry semantics are deliberate.** GETs are replayable; 429s are always replayable
    (rejected before processing); other non-idempotent calls fail fast — Hesabe has no
    idempotency keys, so retrying an ambiguous POST risks double-charging. Redirects
-   are refused in every HTTP backend (`accessCode` must never follow one).
+   are refused (`allow_redirects=False`) — `accessCode` must never follow one.
 7. **The crypto is HesabeCrypt-compatible, not textbook.** AES-256-CBC with manual
    padding to 32-byte blocks (pad byte = pad length), cipher-level padding disabled,
    lowercase hex. Do not "correct" it to PKCS7/16 — it matches Hesabe's reference kit.
@@ -65,7 +67,7 @@ documentation, safe to keep in the repo.
 
 ## Conventions
 
-- Python 3.9+, stdlib-only baseline, `py.typed` shipped.
+- Python 3.9+, `py.typed` shipped.
 - Errors: raise the typed `Hesabe*Error` hierarchy; every error carries
   `message`, `code`, `status_code`, `raw`.
 - Dotenv is opt-in (`env_path=`); constructing a client must never mutate

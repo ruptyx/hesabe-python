@@ -5,8 +5,9 @@ from __future__ import annotations
 import unittest
 
 from _support import CIPHER, IV_KEY, SECRET_KEY, load_fixture
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-from hesabe.crypto import HesabeCipher, _encrypt_cbc, is_hex
+from hesabe.crypto import HesabeCipher, is_hex
 from hesabe.errors import HesabeConfigurationError, HesabeSignatureError
 
 
@@ -23,7 +24,11 @@ class InteropVectorTest(unittest.TestCase):
 
 class DecryptRejectionTest(unittest.TestCase):
     def _raw(self, block: bytes) -> str:
-        return _encrypt_cbc(SECRET_KEY.encode(), IV_KEY.encode(), block).hex()
+        """Encrypts a raw block without Hesabe padding, to craft bad ciphertexts."""
+        encryptor = Cipher(
+            algorithms.AES(SECRET_KEY.encode()), modes.CBC(IV_KEY.encode())
+        ).encryptor()
+        return (encryptor.update(block) + encryptor.finalize()).hex()
 
     def test_rejects_zero_padding_byte(self):
         with self.assertRaises(HesabeSignatureError):
@@ -65,6 +70,11 @@ class RoundTripTest(unittest.TestCase):
     def test_non_ascii_round_trip(self):
         payload = {"name": "أحمد المنصوري", "amount": "9.900"}
         self.assertEqual(CIPHER.decrypt(CIPHER.encrypt(payload)), payload)
+
+    def test_round_trip_at_every_padding_boundary(self):
+        for filler in range(65):
+            payload = {"m": "x" * filler}
+            self.assertEqual(CIPHER.decrypt(CIPHER.encrypt(payload)), payload)
 
 
 if __name__ == "__main__":
